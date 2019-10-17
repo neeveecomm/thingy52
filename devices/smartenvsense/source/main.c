@@ -58,8 +58,7 @@
 #include "nrf_sdh_ble.h"
 #include "boards.h"
 #include "app_timer.h"
-#include "app_button.h"
-#include "ble_lbs.h"
+#include "ble_ess.h"
 #include "nrf_ble_gatt.h"
 #include "nrf_ble_qwr.h"
 #include "nrf_pwr_mgmt.h"
@@ -67,14 +66,15 @@
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
-
+#include "dht11.h"
+#include "nrf_delay.h"
 
 #define ADVERTISING_LED                 BSP_BOARD_LED_0                         /**< Is on when device is advertising. */
 #define CONNECTED_LED                   BSP_BOARD_LED_1                         /**< Is on when device has connected. */
 #define LEDBUTTON_LED                   BSP_BOARD_LED_2                         /**< LED to be toggled with the help of the LED Button Service. */
 #define LEDBUTTON_BUTTON                BSP_BUTTON_0                            /**< Button that will trigger the notification event with the LED Button Service */
 
-#define DEVICE_NAME                     "Nordic_Blinky"                         /**< Name of device. Will be included in the advertising data. */
+#define DEVICE_NAME                     "SmartEnvSense"                         /**< Name of device. Will be included in the advertising data. */
 
 #define APP_BLE_OBSERVER_PRIO           3                                       /**< Application's BLE observer priority. You shouldn't need to modify this value. */
 #define APP_BLE_CONN_CFG_TAG            1                                       /**< A tag identifying the SoftDevice BLE configuration. */
@@ -97,7 +97,7 @@
 #define DEAD_BEEF                       0xDEADBEEF                              /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
 
-BLE_LBS_DEF(m_lbs);                                                             /**< LED Button Service instance. */
+BLE_ESS_DEF(m_ess);                                                             /**< LED Button Service instance. */
 NRF_BLE_GATT_DEF(m_gatt);                                                       /**< GATT module instance. */
 NRF_BLE_QWR_DEF(m_qwr);                                                         /**< Context for the Queued Write module.*/
 
@@ -106,6 +106,10 @@ static uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID;                        
 static uint8_t m_adv_handle = BLE_GAP_ADV_SET_HANDLE_NOT_SET;                   /**< Advertising handle used to identify an advertising set. */
 static uint8_t m_enc_advdata[BLE_GAP_ADV_SET_DATA_SIZE_MAX];                    /**< Buffer for storing an encoded advertising set. */
 static uint8_t m_enc_scan_response_data[BLE_GAP_ADV_SET_DATA_SIZE_MAX];         /**< Buffer for storing an encoded scan data. */
+
+static bool temp_notif_enabled = false;
+static bool humid_notif_enabled = false;
+static bool updtmrexp = true;
 
 /**@brief Struct that contains pointers to the encoded advertising data. */
 static ble_gap_adv_data_t m_adv_data =
@@ -122,6 +126,7 @@ static ble_gap_adv_data_t m_adv_data =
 
     }
 };
+
 
 /**@brief Function for assert macro callback.
  *
@@ -212,7 +217,7 @@ static void advertising_init(void)
     ble_advdata_t advdata;
     ble_advdata_t srdata;
 
-    ble_uuid_t adv_uuids[] = {{LBS_UUID_SERVICE, m_lbs.uuid_type}};
+    ble_uuid_t adv_uuids[] = {{ESS_UUID_SERVICE, BLE_UUID_TYPE_BLE}};
 
     // Build and set advertising data.
     memset(&advdata, 0, sizeof(advdata));
@@ -261,33 +266,32 @@ static void nrf_qwr_error_handler(uint32_t nrf_error)
     APP_ERROR_HANDLER(nrf_error);
 }
 
-
-/**@brief Function for handling write events to the LED characteristic.
- *
- * @param[in] p_lbs     Instance of LED Button Service to which the write applies.
- * @param[in] led_state Written/desired state of the LED.
- */
-static void led_write_handler(uint16_t conn_handle, ble_lbs_t * p_lbs, uint8_t led_state)
+void ble_ess_notif_write_handler(uint16_t uuid_char, uint8_t new_state)
 {
-    if (led_state)
-    {
-        bsp_board_led_on(LEDBUTTON_LED);
-        NRF_LOG_INFO("Received LED ON!");
-    }
-    else
-    {
-        bsp_board_led_off(LEDBUTTON_LED);
-        NRF_LOG_INFO("Received LED OFF!");
+    switch(uuid_char) {
+        case ESS_UUID_TEMPERATURE_CHAR:
+            if(new_state == 0) { 
+                temp_notif_enabled = false;
+            }else{
+                temp_notif_enabled = true;
+            }
+            break;
+        case ESS_UUID_HUMIDITY_CHAR:
+            if(new_state == 0) { 
+                humid_notif_enabled = false;
+            }else{
+                humid_notif_enabled = true;
+            }
+            break;
+        default:
+            break;
     }
 }
-
-
 /**@brief Function for initializing services that will be used by the application.
  */
 static void services_init(void)
 {
     ret_code_t         err_code;
-    ble_lbs_init_t     init     = {0};
     nrf_ble_qwr_init_t qwr_init = {0};
 
     // Initialize Queued Write Module.
@@ -296,10 +300,8 @@ static void services_init(void)
     err_code = nrf_ble_qwr_init(&m_qwr, &qwr_init);
     APP_ERROR_CHECK(err_code);
 
-    // Initialize LBS.
-    init.led_write_handler = led_write_handler;
-
-    err_code = ble_lbs_init(&m_lbs, &init);
+    m_ess.notif_write_handler = ble_ess_notif_write_handler;
+    err_code = ble_ess_init(&m_ess);
     APP_ERROR_CHECK(err_code);
 }
 
@@ -391,16 +393,12 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
             m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
             err_code = nrf_ble_qwr_conn_handle_assign(&m_qwr, m_conn_handle);
             APP_ERROR_CHECK(err_code);
-            err_code = app_button_enable();
-            APP_ERROR_CHECK(err_code);
             break;
 
         case BLE_GAP_EVT_DISCONNECTED:
             NRF_LOG_INFO("Disconnected");
             bsp_board_led_off(CONNECTED_LED);
             m_conn_handle = BLE_CONN_HANDLE_INVALID;
-            err_code = app_button_disable();
-            APP_ERROR_CHECK(err_code);
             advertising_start();
             break;
 
@@ -492,39 +490,12 @@ static void button_event_handler(uint8_t pin_no, uint8_t button_action)
     switch (pin_no)
     {
         case LEDBUTTON_BUTTON:
-            NRF_LOG_INFO("Send button state change.");
-            err_code = ble_lbs_on_button_change(m_conn_handle, &m_lbs, button_action);
-            if (err_code != NRF_SUCCESS &&
-                err_code != BLE_ERROR_INVALID_CONN_HANDLE &&
-                err_code != NRF_ERROR_INVALID_STATE &&
-                err_code != BLE_ERROR_GATTS_SYS_ATTR_MISSING)
-            {
-                APP_ERROR_CHECK(err_code);
-            }
             break;
 
         default:
             APP_ERROR_HANDLER(pin_no);
             break;
     }
-}
-
-
-/**@brief Function for initializing the button handler module.
- */
-static void buttons_init(void)
-{
-    ret_code_t err_code;
-
-    //The array must be static because a pointer to it will be saved in the button handler module.
-    static app_button_cfg_t buttons[] =
-    {
-        {LEDBUTTON_BUTTON, false, BUTTON_PULL, button_event_handler}
-    };
-
-    err_code = app_button_init(buttons, ARRAY_SIZE(buttons),
-                               BUTTON_DETECTION_DELAY);
-    APP_ERROR_CHECK(err_code);
 }
 
 
@@ -559,6 +530,10 @@ static void idle_state_handle(void)
     }
 }
 
+void ess_notif_timeout_handler(void * p_context)
+{
+    updtmrexp = true;
+}
 
 /**@brief Function for application main entry.
  */
@@ -568,7 +543,6 @@ int main(void)
     log_init();
     leds_init();
     timers_init();
-    buttons_init();
     power_management_init();
     ble_stack_init();
     gap_params_init();
@@ -577,14 +551,38 @@ int main(void)
     advertising_init();
     conn_params_init();
 
+    ess_notif_timers_create(ess_notif_timeout_handler);
+    ess_notif_timer_start(ESS_UPDATE_INTERVAL);
+
     // Start execution.
-    NRF_LOG_INFO("Blinky example started.");
+    NRF_LOG_INFO("Environment Sensing Service Started.");
     advertising_start();
 
     // Enter main loop.
     for (;;)
     {
+        uint16_t temperature, humidity;
+        DHTxx_ErrorCode dhtErrCode;
+
         idle_state_handle();
+        if(updtmrexp) {
+          dhtErrCode = DHTxx_Read(&temperature, &humidity);
+          if(dhtErrCode == DHT11_OK) {
+              NRF_LOG_INFO("Temperature: %d Humidity: %d\n", temperature, humidity);
+
+              if(temp_notif_enabled) {
+                  ble_ess_notify_temp(m_conn_handle, &m_ess, temperature);
+              }else{
+                  ble_ess_update_temp(&m_ess, temperature);
+              }
+              if(humid_notif_enabled) {
+                  ble_ess_notify_humid(m_conn_handle, &m_ess, humidity);
+              }else{
+                  ble_ess_update_humid(&m_ess, humidity);
+              }
+          }
+          updtmrexp=false;
+        }
     }
 }
 
