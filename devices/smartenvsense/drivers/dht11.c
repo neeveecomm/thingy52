@@ -23,14 +23,6 @@ static void Data_ClrVal()
         nrf_gpio_pin_clear(DHT11_PIN);
 }
 
-static void EnterCritical()
-{
-}
-
-static void ExitCritical()
-{
-}
-
 void DelayUSec(int usec)
 {
        nrf_delay_us(usec);
@@ -58,7 +50,6 @@ DHTxx_ErrorCode DHTxx_Read (uint16_t *temperatureCentigrade, uint16_t *humidityC
   Data_SetInput();
   DelayUSec(50);
   if(Data_GetVal()==0) {
-    ExitCritical(); /* re-enabling interrupts */
     return DHT11_NO_PULLUP;
   }
 
@@ -71,7 +62,6 @@ DHTxx_ErrorCode DHTxx_Read (uint16_t *temperatureCentigrade, uint16_t *humidityC
 
   /* check for acknowledge signal */
   if (Data_GetVal()!=0) { /* signal must be pulled low by the sensor */
-    ExitCritical(); /* re-enabling interrupts */
     return DHT11_NO_ACK_0;
   }
   /* wait max 100 us for the ack signal from the sensor */
@@ -79,7 +69,6 @@ DHTxx_ErrorCode DHTxx_Read (uint16_t *temperatureCentigrade, uint16_t *humidityC
   while(Data_GetVal()==0) { /* wait until signal goes up */
 	DelayUSec(5);
     if (--cntr==0) {
-      ExitCritical(); /* re-enabling interrupts */
       return DHT11_NO_ACK_1; /* signal should be up for the ACK here */
     }
   }
@@ -88,7 +77,6 @@ DHTxx_ErrorCode DHTxx_Read (uint16_t *temperatureCentigrade, uint16_t *humidityC
   while(Data_GetVal()!=0) { /* wait until signal goes down */
 	DelayUSec(5);
     if (--cntr==0) {
-      ExitCritical(); /* re-enabling interrupts */
       return DHT11_NO_ACK_0; /* signal should be down to zero again here */
     }
   }
@@ -101,7 +89,6 @@ DHTxx_ErrorCode DHTxx_Read (uint16_t *temperatureCentigrade, uint16_t *humidityC
     while(Data_GetVal()==0) {
       DelayUSec(5);
       if (--cntr==0) {
-        ExitCritical(); /* re-enabling interrupts */
         return DHT11_NO_DATA_0;
       }
     }
@@ -109,7 +96,6 @@ DHTxx_ErrorCode DHTxx_Read (uint16_t *temperatureCentigrade, uint16_t *humidityC
     while(Data_GetVal()!=0) {
       DelayUSec(5);
       if (--cntr==0) {
-        ExitCritical(); /* re-enabling interrupts */
         return DHT11_NO_DATA_1;
       }
     }
@@ -123,7 +109,6 @@ DHTxx_ErrorCode DHTxx_Read (uint16_t *temperatureCentigrade, uint16_t *humidityC
       data = 0;
     }
   } while(--loopBits!=0);
-  ExitCritical(); /* re-enabling interrupts */
 
   /* now we have the 40 bit (5 bytes) data:
    * byte 1: humidity integer data
@@ -138,8 +123,8 @@ DHTxx_ErrorCode DHTxx_Read (uint16_t *temperatureCentigrade, uint16_t *humidityC
   }
 
   /* store data values for caller */
-  *humidityCentipercent = ((int)buffer[0])*100;
-  *temperatureCentigrade = ((int)buffer[2])*100;
+  *humidityCentipercent = ((int)buffer[0])*100+buffer[1];
+  *temperatureCentigrade = ((int)buffer[2])*100+buffer[3];
 
   return DHT11_OK;
 }
