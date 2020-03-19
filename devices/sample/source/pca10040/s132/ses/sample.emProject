@@ -114,10 +114,6 @@
       <file file_name="../../../../../../components/softdevice/common/nrf_sdh_ble.c" />
       <file file_name="../../../../../../components/softdevice/common/nrf_sdh_soc.c" />
     </folder>
-    <folder Name="Drivers">
-      <file file_name="../../../../drivers/dht11.c" />
-      <file file_name="../../../../drivers/dht11.h" />
-    </folder>
   </project>
   <configuration
     Name="Release"
